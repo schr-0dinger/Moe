@@ -1,105 +1,57 @@
 use chrono::{Local, Timelike};
-use std::{thread, time};
+use std::{io::{stdout, Write}, thread, time};
 
-const BLOCK_DIGITS: [[&str; 6]; 10] = [
-    /*
-        Migrating to Unicode bitmap :: Saves memory
-        Got to change &str either to u16 or u8
-        u64 if bit-packing to be used ( 6 rows x 10 bits per digit)
-    */
-    [
-        // 0
-        " ████████ ", // 0111111110 -> 0x1FE
-        " ██    ██ ", // 0100000010 -> 0x102
-        " ██    ██ ", // 0100000010 -> 0x102
-        " ██    ██ ", // 0100000010 -> 0x102
-        " ████████ ", // 0111111110 -> 0x1FE
-        "          ", // 0000000000 -> 0x000
-    ],
-    [
-        // 1
-        " ██  ", // 000011000 -> 0x060
-        " ██  ", // 000110000 -> 0x060
-        " ██  ", // 000110000 -> 0x060
-        " ██  ", // 000110000 -> 0x060
-        " ██  ", // 000110000 -> 0x060
-        "     ", // 000110000 -> 0x060
-    ],
-    [
-        // 2
-        " ██████  ", // 0x1FE
-        "     ██  ", // 0x006 <- 0000000110
-        " ██████  ", // 0X1FE
-        " ██      ", // 0x180 <- 0110000000
-        " ██████  ", // 0X1FE
-        "         ", // 0x000
-    ],
-    [
-        // 3
-        " ██████  ", // 0x1FE
-        "     ██  ", // 0X006
-        "  █████  ", // 0X07E
-        "     ██  ", // 0X006
-        " ██████  ", // 0X1FE
-        "         ", // 0x000
-    ],
-    [
-        // 4
-        " ██   ██ ", // 0x082
-        " ██   ██ ", // 0x182
-        " ███████ ", // 0x1FE
-        "      ██ ", // 0x002
-        "      ██ ", // 0x002
-        "         ", // 0x000
-    ],
-    [
-        // 5
-        " ███████ ", // 0x1FE
-        " ██      ", // 0x180
-        " ███████ ", // 0x1FE
-        "      ██ ", // 0x180
-        " ███████ ", // 0x1FE
-        "         ", // 0x000
-    ],
-    [
-        // 6
-        " ███████  ", // 0x1FE
-        " ██       ", // 0x180
-        " ████████ ", // 0x1FE
-        " ██    ██ ", // 0x182
-        " ████████ ", // 0x1FE
-        "          ", // 0x000
-    ],
-    [
-        // 7
-        " ███████ ", // 0x1FE
-        "      ██ ", // 0x006
-        "      ██ ", // 0x006
-        "      ██ ", // 0x006
-        "      ██ ", // 0x006
-        "         ", // 0x000
-    ],
-    [
-        // 8
-        " ███████ ", // 0x1FE
-        " ██   ██ ", // 0x182
-        " ███████ ", // 0x1FE
-        " ██   ██ ", // 0x182
-        " ███████ ", // 0x1FE
-        "         ", // 0x000
-    ],
-    [
-        // 9
-        " ███████ ", // 0x1FE
-        " ██   ██ ", // 0x182
-        " ███████ ", // 0x1FE
-        "      ██ ", // 0x180
-        " ███████ ", // 0x1FE
-        "         ", // 0x000
-    ],
+// ANSI color codes
+const COLOR_RESET: &str = "\x1B[0m";
+const COLOR_DIGIT: &str = "\x1B[1;36m"; // Bright Cyan for numbers
+const COLOR_COLON: &str = "\x1B[1;31m"; // Bright Red for colon `:`
+
+// 6-row representation of numbers
+// The rendered digits 1 and colon are thinner
+const BLOCK_DIGITS: [[u16; 6]; 10] = [
+    [0x1FE, 0x186, 0x186, 0x186, 0x1FE, 0x0], // 0
+    [ 14, 6, 6, 6, 6, 0], // 1
+    [0x1FE, 0x006, 0x1FE, 0x180, 0x1FE, 0x0], // 2
+    [0x1FE, 0x006, 0x07E, 0x006, 0x1FE, 0x0], // 3
+    [0x186, 0x186, 0x1FE, 0x006, 0x006, 0x0], // 4
+    [0x1FE, 0x180, 0x1FE, 0x006, 0x1FE, 0x0], // 5
+    [0x1FE, 0x180, 0x1FE, 0x186, 0x1FE, 0x0], // 6
+    [0x1FE, 0x006, 0x006, 0x006, 0x006, 0x0], // 7
+    [0x1FE, 0x186, 0x1FE, 0x186, 0x1FE, 0x0], // 8
+    [0x1FE, 0x186, 0x1FE, 0x006, 0x1FE, 0x0], // 9
 ];
 
-/// Prints ASCII clock digits in color
+// Colon separator (6 rows)
+const COLON: [u16; 6] = [0, 6, 0, 6, 0, 0];
+
+/// Renders a row-wise formatted output of digits
+fn render_row(digits: &[u8], row: usize, scale: usize) {
+    for _ in 0..scale {
+        for &digit in digits {
+            let (bitmap, color) = if digit == 10 {
+                (&COLON, COLOR_COLON)
+            } else {
+                (&BLOCK_DIGITS[digit as usize], COLOR_DIGIT)
+            };
+
+            let row_value = bitmap[row];
+            
+            // 4-bit for 1 and colon ; Rest has 10-bit
+            let width = if digit == 1 || digit == 10 { 4 } else { 10 };
+
+            for col in (0..width).rev() {
+                let pixel = (row_value >> col) & 1;
+                let symbol = if pixel == 1 { "█" } else { " " };
+                for _ in 0..scale {
+                    print!("{}{}{}", color, symbol, COLOR_RESET);
+                }
+            }
+        }
+        println!();
+    }
+}
+
+/// Prints the time in a digital block style
 fn print_time(hours: u8, minutes: u8, seconds: u8) {
     let digits = [
         hours / 10,
@@ -112,39 +64,23 @@ fn print_time(hours: u8, minutes: u8, seconds: u8) {
         seconds % 10,
     ];
 
-    // ANSI color codes
-    let color_reset = "\x1B[0m"; // Reset to default color
-    let color_digit = "\x1B[1;36m"; // Bright Cyan for numbers
-    let color_colon = "\x1B[1;31m"; // Bright Red for colon `:`
-
-    // Colon ASCII art
-    let colon = ["    ", " ██ ", "    ", " ██ ", "    ", "    "];
-
     // Clear screen
-    print!("\x1B[2J\x1B[H");
+    print!("\x1B[H\x1B[J");
+    stdout().flush().unwrap(); // Flush output for instant effect
 
     // Add top padding
-    let padding_lines = 5;
-    for _ in 0..padding_lines {
+    for _ in 0..2 {
         println!();
     }
 
-    // Print each row of the ASCII clock
+    // Render each row separately
     for row in 0..6 {
-        for &digit in &digits {
-            if digit == 10 {
-                print!("{}{}{}", color_colon, colon[row], color_reset); // Colored Colon
-            } else {
-                print!(
-                    "{}{}{}",
-                    color_digit, BLOCK_DIGITS[digit as usize][row], color_reset
-                ); // Colored Digits
-            }
-        }
-        println!();
+        render_row(&digits, row, 1);
     }
+    println!();
 }
 
+/// Main function to continuously update the time
 fn main() {
     loop {
         let now = Local::now();
